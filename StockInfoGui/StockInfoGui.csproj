@@ -2,7 +2,12 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net5.0</TargetFramework>
+    <TargetFramework>netcoreapp3.1</TargetFramework>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <WarningLevel>5</WarningLevel>
+    <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,6 +18,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="AlphaVantage.Net.Core" Version="2.0.2" />
+    <PackageReference Include="AlphaVantage.Net.Stocks" Version="2.0.2" />
     <PackageReference Include="Avalonia" Version="0.10.7" />
     <PackageReference Include="Avalonia.Desktop" Version="0.10.7" />
     <PackageReference Include="GtkSharp" Version="3.24.24.*" />

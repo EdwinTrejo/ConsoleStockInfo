@@ -15,7 +15,7 @@ namespace StockInfoGui.Structures
         public decimal OwnershipLow { get; set; }
         public decimal PriceOpen { get; set; }
         public decimal DayChange { get; set; }
-        public double ChangeSinceBuy { get; set; }
+        public decimal ChangeSinceBuy { get; set; }
         public int DaysFromPurchase { get; set; }
     }
 

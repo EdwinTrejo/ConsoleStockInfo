@@ -23,14 +23,15 @@ namespace StockInfoGui
         private bool primary_columns_added = false;
         private bool additional_columns_added = false;
 
-        public string license_file;
-        public string listing_file;
+        public string license_file = @"C:\Users\horse\Desktop\license.stock";
+        public string listing_file = @"C:\Users\horse\Desktop\listing.stock";
 
         //public ScrolledWindow sw;
         public ListStore store;
         public TreeView treeView;
 
         public StockFile stock_file;
+        public StockProcessor stock_processor;
 
         enum Column
         {
@@ -81,6 +82,8 @@ namespace StockInfoGui
 
             _menubar1.Append(file);
             _menubar1.Append(file2);
+
+            stock_processor = new StockProcessor();
 
             store = new ListStore
                 (
@@ -158,15 +161,30 @@ namespace StockInfoGui
             getfile.Destroy();
         }
 
-        private void CalculateResults(object sender, EventArgs a)
-        {
-            AddColumnsAfterProcessing(treeView);
-            _scrolledwindow1.WidthRequest = 1200;
-        }
-
         private void ClearResults(object sender, EventArgs a)
         {
             store.Clear();
+        }
+
+        private void CalculateResults(object sender, EventArgs a)
+        {
+            try
+            {
+                stock_processor.Process(stock_file, license_file);
+                AddColumnsAfterProcessing(treeView);
+                CreateCompleteModel();
+                _scrolledwindow1.Add(treeView);
+                _scrolledwindow1.WidthRequest = 1200;
+                _listbox1.ShowAll();
+            }
+            catch (Exception e)
+            {
+                MessageDialog md = new MessageDialog(this,
+                DialogFlags.DestroyWithParent, MessageType.Error,
+                ButtonsType.Close, $"Error processing stock\n{e.Message}");
+                md.Run();
+                md.Destroy();
+            }
         }
 
         private void ProcessFile(object sender, EventArgs a)
@@ -174,17 +192,16 @@ namespace StockInfoGui
             try
             {
                 stock_file = new StockFile(listing_file);
-                //_listbox1.BorderWidth = 8;
                 CreateModel();
                 _scrolledwindow1.Add(treeView);
                 _scrolledwindow1.HeightRequest = 500;
                 _listbox1.ShowAll();
             }
-            catch
+            catch (Exception e)
             {
                 MessageDialog md = new MessageDialog(this,
                 DialogFlags.DestroyWithParent, MessageType.Error,
-                ButtonsType.Close, "Error loading file");
+                ButtonsType.Close, $"Error processing file\n{e.Message}");
                 md.Run();
                 md.Destroy();
             }
@@ -238,14 +255,6 @@ namespace StockInfoGui
         {
             if (!additional_columns_added && primary_columns_added)
             {
-
-                //OwnershipHigh,
-                //OwnershipLow,
-                //PriceOpen,
-                //DayChange,
-                //ChangeSinceBuy,
-                //DaysFromPurchase
-
                 //typeof(string)  //Price
                 CellRendererText rendererText = new CellRendererText();
                 TreeViewColumn column = new TreeViewColumn("Price", rendererText,
@@ -322,6 +331,44 @@ namespace StockInfoGui
                 string BuyDate = item.BuyDate == null ? string.Empty : ((DateTime)item.BuyDate).ToShortDateString();
                 string Quantity = item.Quantity.ToString();
                 store.AppendValues(item.Ticker, Quantity, item.Account, BuyCost, BuyDate);
+            }
+        }
+
+        void CreateCompleteModel()
+        {
+            store.Clear();
+            foreach (Structures.StockItem item in stock_processor.file_content)
+            {
+                string BuyCost = item.BuyCost.ToString("C", CultureInfo.CurrentCulture);
+                string BuyDate = item.BuyDate == null ? string.Empty : ((DateTime)item.BuyDate).ToShortDateString();
+                string Quantity = item.Quantity.ToString();
+                string Price = BuyCost;
+                string Worth = BuyCost;
+                string OwnershipHigh = BuyCost;
+                string OwnershipLow = BuyCost;
+                string PriceOpen = BuyCost;
+                string DayChange = "0.0";
+                string ChangeSinceBuy = "0.0";
+                string DaysFromPurchase = "";
+
+                if (item.BuyDate != null)
+                {
+
+                    Price = item.Price.ToString("C", CultureInfo.CurrentCulture);
+                    Worth = item.Worth.ToString("C", CultureInfo.CurrentCulture);
+                    OwnershipHigh = item.OwnershipHigh.ToString("C", CultureInfo.CurrentCulture);
+                    OwnershipLow = item.OwnershipLow.ToString("C", CultureInfo.CurrentCulture);
+                    PriceOpen = item.PriceOpen.ToString("C", CultureInfo.CurrentCulture);
+                    DayChange = item.DayChange.ToString("C", CultureInfo.CurrentCulture);
+                    ChangeSinceBuy = item.ChangeSinceBuy.ToString("C", CultureInfo.CurrentCulture);
+                    DaysFromPurchase = item.Quantity.ToString();
+                }
+
+                store.AppendValues(
+                    item.Ticker, Quantity, item.Account, BuyCost, BuyDate, Price,
+                    Worth, OwnershipHigh, OwnershipLow, PriceOpen, DayChange,
+                    ChangeSinceBuy, DaysFromPurchase
+                    );
             }
         }
 
