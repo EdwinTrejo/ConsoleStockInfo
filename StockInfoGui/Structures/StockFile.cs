@@ -42,7 +42,7 @@ namespace StockInfoGui.Structures
             string Ticker = parts[0];
             double.TryParse(parts[1], out double Quantity);
             string Account = parts[2];
-            decimal.TryParse(parts[3], out decimal BuyCost);
+            double.TryParse(parts[3], out double BuyCost);
 
             StockFileContentLine new_content = new StockFileContentLine()
             {
@@ -68,7 +68,7 @@ namespace StockInfoGui.Structures
         public string Ticker { get; set; }
         public double Quantity { get; set; }
         public string Account { get; set; }
-        public decimal BuyCost { get; set; }
+        public double BuyCost { get; set; }
         public DateTime? BuyDate;
     }
 }

@@ -91,7 +91,15 @@ namespace StockInfoGui
                     typeof(string), //Quantity
                     typeof(string), //Account
                     typeof(string), //BuyCost
-                    typeof(string)  //BuyDate
+                    typeof(string), //BuyDate
+                    typeof(string), //Price
+                    typeof(string), //Worth
+                    typeof(string), //OwnershipHigh
+                    typeof(string), //OwnershipLow
+                    typeof(string), //PriceOpen
+                    typeof(string), //DayChange
+                    typeof(string), //ChangeSinceBuy
+                    typeof(string) //DaysFromPurchase
                 );
 
             treeView = new TreeView(store);
@@ -170,6 +178,16 @@ namespace StockInfoGui
         {
             try
             {
+                Dictionary<string, string> check_unique_items = new Dictionary<string, string>();
+                foreach(var item in stock_file.line_content)
+                {
+                    if (!check_unique_items.ContainsKey(item.Ticker))
+                    {
+                        check_unique_items.Add(item.Ticker, item.Ticker);
+                    }
+                }
+
+                _label1.Text = $"Processing {check_unique_items.Count} items\napproximate time: {check_unique_items.Count} Minutes | {DateTime.Now.AddMinutes(check_unique_items.Count * 3).ToShortTimeString()}";
                 stock_processor.Process(stock_file, license_file);
                 AddColumnsAfterProcessing(treeView);
                 CreateCompleteModel();
@@ -179,9 +197,14 @@ namespace StockInfoGui
             }
             catch (Exception e)
             {
+                string msg = e.Message;
+                string stck_msg = e.StackTrace;
+                string innr_msg = (e.InnerException == null) ? string.Empty : e.InnerException.Message;
+                string border = "\n------------------------\n";
+
                 MessageDialog md = new MessageDialog(this,
-                DialogFlags.DestroyWithParent, MessageType.Error,
-                ButtonsType.Close, $"Error processing stock\n{e.Message}");
+                    DialogFlags.DestroyWithParent, MessageType.Error,
+                    ButtonsType.Close, $"Error processing stock{border}{msg}{border}{stck_msg}{border}{innr_msg}{border}");
                 md.Run();
                 md.Destroy();
             }
@@ -336,7 +359,7 @@ namespace StockInfoGui
 
         void CreateCompleteModel()
         {
-            store.Clear();
+            store.Clear(); 
             foreach (Structures.StockItem item in stock_processor.file_content)
             {
                 string BuyCost = item.BuyCost.ToString("C", CultureInfo.CurrentCulture);
@@ -361,7 +384,7 @@ namespace StockInfoGui
                     PriceOpen = item.PriceOpen.ToString("C", CultureInfo.CurrentCulture);
                     DayChange = item.DayChange.ToString("C", CultureInfo.CurrentCulture);
                     ChangeSinceBuy = item.ChangeSinceBuy.ToString("C", CultureInfo.CurrentCulture);
-                    DaysFromPurchase = item.Quantity.ToString();
+                    DaysFromPurchase = item.DaysFromPurchase.ToString();
                 }
 
                 store.AppendValues(
