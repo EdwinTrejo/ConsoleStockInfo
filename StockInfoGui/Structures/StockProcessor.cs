@@ -28,6 +28,8 @@ namespace StockInfoGui.Structures
         private List<Tuple<StockFileContentLine, List<StockReturnItem>>> query_return_content;
         private Dictionary<string, List<StockReturnItem>> query_return_content_raw;
         private readonly int global_query_timeout = 2000;
+        private volatile bool DB_ACCESS = false;
+        private volatile bool ACCESS_query_return_content = false;
         private readonly string connection_string = ConfigurationManager.AppSettings.Get("ConnectionString");
         private MetaSqlHelper<StockReturnItem> MetaSQLManager = new MetaSqlHelper<StockReturnItem>
             (
@@ -53,7 +55,7 @@ namespace StockInfoGui.Structures
             Money
         }
 
-        public void Process(StockFile stock_file, string licence_path)
+        public async Task Process(StockFile stock_file, string licence_path)
         {
             if (!File.Exists(licence_path)) throw new FileNotFoundException();
             license = File.ReadAllText(licence_path).Trim();
@@ -66,12 +68,14 @@ namespace StockInfoGui.Structures
                 if (!query_return_content_raw.ContainsKey(item.Ticker))
                 {
                     var getFromSQL = GetAllStockReturnReturnItems(item);
-                    if (getFromSQL.Count <= 0)
+                    if (getFromSQL.Count <= 0 && item.BuyDate != null)
                     {
                         //get from alphavantage
-                        //1000 ms * 60 s * 3 m
-                        if (!first_item) Thread.Sleep(1000 * 4 * 1);
-                        List<StockReturnItem> query_res = return_results_for_single_line(item);
+                        //1000 ms * 60 s * 1 m
+                        if (!first_item) await Task.Delay(1000 * 60 * 1);
+                        var udp_inf = return_results_for_single_line(item);
+                        await udp_inf;
+                        List<StockReturnItem> query_res = udp_inf.Result;
                         query_return_content_raw.Add(item.Ticker, query_res);
                     }
                     else if (getFromSQL != null)
@@ -91,12 +95,25 @@ namespace StockInfoGui.Structures
                         StockReturnItem getFromSQL = GetLastStockReturnItemPerTickerID(item.Ticker);
                         if (getFromSQL != null)
                         {
+                            StockOrMutualFundEnum stockOrMutualFundVal = GetTickerStockOrMutualFund(item.Ticker);
                             DateTime rn = DateTime.Now;
                             double minutes_timediff = Math.Abs((getFromSQL.TimestampUTC - rn).TotalMinutes);
-                            if ((rn.Hour <= 18) && (minutes_timediff >= 500))
+                            //if its beetween normal trading hours and if there is even data for today
+
+                            bool isMutualFundAndIsDelayed = stockOrMutualFundVal == StockOrMutualFundEnum.MutualFund && Math.Abs((rn.Date - getFromSQL.TimestampUTC.Date).TotalDays) >= 4;
+                            bool isStockAndIsDelayed = stockOrMutualFundVal == StockOrMutualFundEnum.Stock && Math.Abs((rn.Date - getFromSQL.TimestampUTC.Date).TotalDays) > 1;
+
+                            if (isMutualFundAndIsDelayed || isStockAndIsDelayed)
                             {
-                                List<StockReturnItem> query_res = getStockInfoFromLatest(item);
-                                query_return_content_raw[item.Ticker].AddRange(query_res);
+                                if ((rn.Hour <= 18) && (rn.Hour >= 9) && (minutes_timediff >= 30))
+                                {
+                                    if (!first_item) await Task.Delay(1000 * 60 * 1);
+                                    var query_res_task = getStockInfoFromLatest(item);
+                                    await query_res_task;
+                                    List<StockReturnItem> query_res = query_res_task.Result;
+                                    query_return_content_raw[item.Ticker].AddRange(query_res);
+                                    first_item = false;
+                                }
                             }
                         }
                     }
@@ -114,7 +131,7 @@ namespace StockInfoGui.Structures
             // Process the data and divide between items. Queries are expensive I think
             //
             //
-            //file_content.Clear();
+            file_content.Clear();
             //foreach (Tuple<StockFileContentLine, List<StockReturnItem>> item in query_return_content)
             //{
             //    file_content.Add(ProcessStockReturnItemSync(item));
@@ -126,7 +143,6 @@ namespace StockInfoGui.Structures
                 //perform the calculations
                 tasks.Add(ProcessStockReturnItemAsync(item));
             }
-
             Task task = Task.Run(async () =>
             {
                 StockItem[] async_results = await Task.WhenAll(tasks);
@@ -134,7 +150,7 @@ namespace StockInfoGui.Structures
                 file_content.AddRange(async_list_results);
             });
             task.Wait();
-
+            await task;
         }
 
         public StockProcessor()
@@ -160,8 +176,11 @@ namespace StockInfoGui.Structures
                 Value = TickerID,
                 SqlDbType = System.Data.SqlDbType.Int
             });
+            while (DB_ACCESS) { }
+            DB_ACCESS = true;
             MetaSQLManager.CommitStoreProcedure(sqlParameters, "[StockData].[StockData].[GetAllStockReturnItemPerTickerID]");
             MetaSQLManager.GetResults(out List<StockReturnItem> StockReturnItemsOut);
+            DB_ACCESS = false;
             return StockReturnItemsOut;
         }
 
@@ -181,8 +200,11 @@ namespace StockInfoGui.Structures
                 Value = TickerID,
                 SqlDbType = System.Data.SqlDbType.Int
             });
+            while (DB_ACCESS) { }
+            DB_ACCESS = true;
             MetaSQLManager.CommitStoreProcedure(sqlParameters, "[StockData].[StockData].[GetLastStockReturnItemPerTickerID]");
             MetaSQLManager.GetResults(out List<StockReturnItem> StockReturnItemsOut);
+            DB_ACCESS = false;
             return StockReturnItemsOut.FirstOrDefault();
         }
 
@@ -209,8 +231,11 @@ namespace StockInfoGui.Structures
                 Value = TimestampUTC.Date,
                 SqlDbType = System.Data.SqlDbType.Date
             });
+            while (DB_ACCESS) { }
+            DB_ACCESS = true;
             MetaSQLManager.CommitStoreProcedure(sqlParameters, "[StockData].[StockData].[GetLastStockReturnItemPerTickerIDAndDate]");
             MetaSQLManager.GetResults(out List<StockReturnItem> StockReturnItemsOut);
+            DB_ACCESS = false;
             return StockReturnItemsOut.FirstOrDefault();
         }
 
@@ -293,13 +318,14 @@ namespace StockInfoGui.Structures
                     Value = Volume,
                     SqlDbType = System.Data.SqlDbType.BigInt
                 });
-
                 CommitStoreProcedure(sqlParameters, storedProcedure);
             }
         }
 
         public void CommitStoreProcedure(List<SqlParameter> sqlParameters, string storedProcedure)
         {
+            while (DB_ACCESS) { }
+            DB_ACCESS = true;
             using (SqlConnection connection = new SqlConnection(connection_string))
             {
                 connection.Open();
@@ -335,6 +361,7 @@ namespace StockInfoGui.Structures
                     }
                 }
             }
+            DB_ACCESS = false;
         }
 
         public int GetTickerID(string ticker)
@@ -359,6 +386,30 @@ namespace StockInfoGui.Structures
             CommitStoreProcedure(sqlParameters, storedProcedure);
             SqlParameter param = sqlParameters.Where(x => x.ParameterName == "@TickerID").FirstOrDefault();
             return (int)param.Value;
+        }
+
+        public StockOrMutualFundEnum GetTickerStockOrMutualFund(string ticker)
+        {
+            string storedProcedure = "[StockData].[StockData].[GetTickerStockOrMutualFund]";
+            byte StockOrMutualFund = 0;
+            List<SqlParameter> sqlParameters = new List<SqlParameter>();
+            sqlParameters.Add(new SqlParameter
+            {
+                ParameterName = "@Ticker",
+                Direction = System.Data.ParameterDirection.Input,
+                Value = ticker,
+                SqlDbType = System.Data.SqlDbType.VarChar
+            });
+            sqlParameters.Add(new SqlParameter
+            {
+                ParameterName = "@StockOrMutualFund",
+                Direction = System.Data.ParameterDirection.Output,
+                Value = StockOrMutualFund,
+                SqlDbType = System.Data.SqlDbType.TinyInt
+            });
+            CommitStoreProcedure(sqlParameters, storedProcedure);
+            SqlParameter param = sqlParameters.Where(x => x.ParameterName == "@StockOrMutualFund").FirstOrDefault();
+            return (StockOrMutualFundEnum)((byte)param.Value);
         }
 
         public void InsertTicker(string ticker, byte StockOrMutualFund = 0)
@@ -387,9 +438,12 @@ namespace StockInfoGui.Structures
 
         private async Task<StockItem> ProcessStockReturnItemAsync(Tuple<StockFileContentLine, List<StockReturnItem>> return_item)
         {
+            while (ACCESS_query_return_content) { }
+            ACCESS_query_return_content = true;
             StockItem new_stock_item = new StockItem();
             StockFileContentLine stockFileContentLine = return_item.Item1;
             List<StockReturnItem> stockReturnItems = return_item.Item2;
+            ACCESS_query_return_content = false;
 
             //public string Ticker { get; set; }
             new_stock_item.Ticker = stockFileContentLine.Ticker;
@@ -512,22 +566,26 @@ namespace StockInfoGui.Structures
             return new_stock_item;
         }
 
-        private List<StockReturnItem> return_results_for_single_line(StockFileContentLine symbol)
+        private async Task<List<StockReturnItem>> return_results_for_single_line(StockFileContentLine symbol)
         {
             List<StockReturnItem> combined_data = new List<StockReturnItem>();
-            try
-            {
-                combined_data.AddRange(getStockInfoFromLatest(symbol));
-                combined_data.AddRange(getStockInfoFromWeekly(symbol));
-            }
-            catch (Exception ex)
-            {
-                throw new Exception($"Processing {symbol.Ticker} Failed\n{ex.InnerException?.Message}");
-            }
+            //try
+            //{
+            var latest = getStockInfoFromLatest(symbol);
+            await latest;
+            combined_data.AddRange(latest.Result);
+            var weekly = getStockInfoFromWeekly(symbol);
+            await weekly;
+            combined_data.AddRange(weekly.Result);
+            //}
+            //catch (Exception ex)
+            //{
+            //    throw new Exception($"Processing {symbol.Ticker} Failed\n{ex.InnerException?.Message}");
+            //}
             return combined_data;
         }
 
-        private List<StockReturnItem> getStockInfoFromLatest(StockFileContentLine symbol)
+        private async Task<List<StockReturnItem>> getStockInfoFromLatest(StockFileContentLine symbol)
         {
             List<StockReturnItem> pull_intraday_information = new List<StockReturnItem>();
             if (symbol.BuyDate != null)
@@ -549,17 +607,17 @@ namespace StockInfoGui.Structures
                     }
                     else
                     {
-                        curr_interval = Interval.Min1;
+                        curr_interval = Interval.Min5;
                         InsertTicker(symbol.Ticker, StockOrMutualFundEnum.Stock.Value());
                     }
 
-                    stockTs = await stocksClient.GetTimeSeriesAsync(symbol.Ticker, curr_interval, OutputSize.Full, isAdjusted: false);
+                    stockTs = await stocksClient.GetTimeSeriesAsync(symbol.Ticker, curr_interval, OutputSize.Compact, isAdjusted: true);
                     if (stockTs == null) throw new AccessViolationException("Stock Access failed");
                     stockDataPoints = stockTs.DataPoints.ToList();
                     pull_intraday_information = ProcessDataForMe(stockTs.DataPoints.ToList());
                 });
 
-                if (!task.IsCompleted) Thread.Sleep(global_query_timeout);
+                if (!task.IsCompleted) await Task.Delay(global_query_timeout);
                 task.Wait();
                 if (stockDataPoints.Count > 0)
                     WriteDatapointsToDB(stockDataPoints, symbol);
@@ -571,7 +629,7 @@ namespace StockInfoGui.Structures
             return pull_intraday_information;
         }
 
-        private List<StockReturnItem> getStockInfoFromWeekly(StockFileContentLine symbol)
+        private async Task<List<StockReturnItem>> getStockInfoFromWeekly(StockFileContentLine symbol)
         {
             List<StockReturnItem> pull_weekly_information = new List<StockReturnItem>();
             if (symbol.BuyDate != null)
@@ -589,7 +647,7 @@ namespace StockInfoGui.Structures
                     stockDataPoints = stockTs.DataPoints.ToList();
                     pull_weekly_information = ProcessDataForMe(stockTs.DataPoints.ToList());
                 });
-                if (!task.IsCompleted) Thread.Sleep(global_query_timeout);
+                if (!task.IsCompleted) await Task.Delay(global_query_timeout);
                 task.Wait();
                 if (stockDataPoints.Count > 0)
                     WriteDatapointsToDB(stockDataPoints, symbol);

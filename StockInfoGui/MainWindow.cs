@@ -5,6 +5,8 @@ using Gtk;
 using StockInfoGui.Structures;
 using System.Globalization;
 using UI = Gtk.Builder.ObjectAttribute;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace StockInfoGui
 {
@@ -20,8 +22,12 @@ namespace StockInfoGui
         [UI] private Button _button2 = null;
         [UI] private Button _button3 = null;
 
+        private Dictionary<string, string> check_unique_items;
+        private volatile int check_unique_items_count = 0;
+
         private bool primary_columns_added = false;
-        private bool additional_columns_added = false;
+        private bool listing_file_processed = false;
+        private volatile bool additional_columns_added = false;
 
         public string license_file = @"C:\Users\horse\Desktop\license.stock";
         public string listing_file = @"C:\Users\horse\Desktop\listing.stock";
@@ -49,6 +55,18 @@ namespace StockInfoGui
             ChangeSinceBuy,
             DaysFromPurchase
         }
+
+        public enum MaterialColors
+        {
+            Primary,
+            PrimaryLight,
+            PrimaryDark,
+            Secondary,
+            SecondaryLight,
+            SecondaryDark
+        }
+
+        Gdk.RGBA[] MaterialColorList = new Gdk.RGBA[Enum.GetNames(typeof(MaterialColors)).Length];
 
         public MainWindow() : this(new Builder("MainWindow.glade")) { }
 
@@ -83,12 +101,43 @@ namespace StockInfoGui
             _menubar1.Append(file);
             _menubar1.Append(file2);
 
+            //Primary 80c686 129 199 132
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)].Alpha = 1;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)].Red = (double)129 / (double)255;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)].Green = (double)199 / (double)255;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)].Blue = (double)132 / (double)255;
+            //PrimaryLight b1f9b3 177 249 179
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.PrimaryLight)].Alpha = 1;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.PrimaryLight)].Red = (double)177 / (double)255;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.PrimaryLight)].Green = (double)249 / (double)255;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.PrimaryLight)].Blue = (double)179 / (double)255;
+            //PrimaryDark 509556 80 149 86
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.PrimaryDark)].Alpha = 1;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.PrimaryDark)].Red = (double)80 / (double)255;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.PrimaryDark)].Green = (double)149 / (double)255;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.PrimaryDark)].Blue = (double)86 / (double)255;
+            //Secondary ef5350 239 83 80
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Secondary)].Alpha = 1;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Secondary)].Red = (double)239 / (double)255;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Secondary)].Green = (double)83 / (double)255;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Secondary)].Blue = (double)80 / (double)255;
+            //SecondaryLight ff867c 255 134 124
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.SecondaryLight)].Alpha = 1;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.SecondaryLight)].Red = (double)255 / (double)255;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.SecondaryLight)].Green = (double)134 / (double)255;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.SecondaryLight)].Blue = (double)124 / (double)255;
+            //SecondaryDark b61827 182 24 39
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.SecondaryDark)].Alpha = 1;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.SecondaryDark)].Red = (double)182 / (double)255;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.SecondaryDark)].Green = (double)24 / (double)255;
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.SecondaryDark)].Blue = (double)39 / (double)255;
+
             stock_processor = new StockProcessor();
 
             store = new ListStore
                 (
                     typeof(string), //Ticker
-                    typeof(string), //Quantity
+                    typeof(double), //Quantity
                     typeof(string), //Account
                     typeof(string), //BuyCost
                     typeof(string), //BuyDate
@@ -112,11 +161,20 @@ namespace StockInfoGui
 
             DeleteEvent += Window_DeleteEvent;
             _button1.Clicked += ProcessFile;
+            _button2.Clicked += UpdateLabelStatus;
             _button2.Clicked += CalculateResults;
+            //_button2.Clicked += delegate (object sender, EventArgs a)
+            //{
+            //    Task task = Task.Run(async () =>
+            //    {
+            //        CalculateResults();
+            //    });
+            //    UpdateLabelStatus();
+            //    task.Wait();
+            //};
+            //_button2.Clicked += CalculateResults;
             _button3.Clicked += ClearResults;
         }
-
-
 
         private void Window_DeleteEvent(object sender, DeleteEventArgs a)
         {
@@ -174,26 +232,30 @@ namespace StockInfoGui
             store.Clear();
         }
 
-        private void CalculateResults(object sender, EventArgs a)
+        private async void UpdateLabelStatus(object sender, EventArgs a)
+        {
+            _label1.Text = $"Processing {check_unique_items_count} items\napproximate time: {check_unique_items_count} Minutes | {DateTime.Now.AddMinutes(check_unique_items_count * 3).ToShortTimeString()}";
+            ShowAll();
+        }
+
+        private async void CalculateResults(object sender, EventArgs a)
         {
             try
             {
-                Dictionary<string, string> check_unique_items = new Dictionary<string, string>();
-                foreach(var item in stock_file.line_content)
-                {
-                    if (!check_unique_items.ContainsKey(item.Ticker))
-                    {
-                        check_unique_items.Add(item.Ticker, item.Ticker);
-                    }
-                }
+                if (!listing_file_processed) throw new Exception("Listing File has not been processed!");
 
-                _label1.Text = $"Processing {check_unique_items.Count} items\napproximate time: {check_unique_items.Count} Minutes | {DateTime.Now.AddMinutes(check_unique_items.Count * 3).ToShortTimeString()}";
-                stock_processor.Process(stock_file, license_file);
-                AddColumnsAfterProcessing(treeView);
-                CreateCompleteModel();
-                _scrolledwindow1.Add(treeView);
-                _scrolledwindow1.WidthRequest = 1200;
-                _listbox1.ShowAll();
+                Task calc_task = Task.Run(async () =>
+                {
+                    await stock_processor.Process(stock_file, license_file);
+                    if (!additional_columns_added) AddColumnsAfterProcessing(treeView);
+                    CreateCompleteModel();
+                    _scrolledwindow1.Add(treeView);
+                    _scrolledwindow1.WidthRequest = 1050;
+                    UpdateExtendedColumnColors();
+                    _listbox1.ShowAll();
+                });
+                calc_task.Wait();
+                await calc_task;
             }
             catch (Exception e)
             {
@@ -202,9 +264,12 @@ namespace StockInfoGui
                 string innr_msg = (e.InnerException == null) ? string.Empty : e.InnerException.Message;
                 string border = "\n------------------------\n";
 
+                string errmsg1 = $"{border}{msg}{border}{stck_msg}{border}";
+                string errmsg2 = $"{border}{msg}{border}{stck_msg}{border}{innr_msg}{border}";
+
                 MessageDialog md = new MessageDialog(this,
                     DialogFlags.DestroyWithParent, MessageType.Error,
-                    ButtonsType.Close, $"Error processing stock{border}{msg}{border}{stck_msg}{border}{innr_msg}{border}");
+                    ButtonsType.Close, $"Error processing stock{errmsg1}");
                 md.Run();
                 md.Destroy();
             }
@@ -219,6 +284,17 @@ namespace StockInfoGui
                 _scrolledwindow1.Add(treeView);
                 _scrolledwindow1.HeightRequest = 500;
                 _listbox1.ShowAll();
+                check_unique_items = new Dictionary<string, string>();
+                foreach (var item in stock_file.line_content)
+                {
+                    if (!check_unique_items.ContainsKey(item.Ticker))
+                    {
+                        check_unique_items.Add(item.Ticker, item.Ticker);
+                    }
+                }
+                check_unique_items_count = check_unique_items.Count;
+
+                listing_file_processed = true;
             }
             catch (Exception e)
             {
@@ -234,6 +310,7 @@ namespace StockInfoGui
         {
             //typeof(string), //Ticker
             CellRendererText rendererText = new CellRendererText();
+            rendererText.CellBackgroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)];
             TreeViewColumn column = new TreeViewColumn("Ticker", rendererText,
                 "text", Column.Ticker);
             column.SortColumnId = (int)Column.Ticker;
@@ -242,6 +319,7 @@ namespace StockInfoGui
 
             //typeof(string), //Quantity
             rendererText = new CellRendererText();
+            rendererText.CellBackgroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)];
             column = new TreeViewColumn("Quantity", rendererText,
                 "text", Column.Quantity);
             column.SortColumnId = (int)Column.Quantity;
@@ -250,6 +328,7 @@ namespace StockInfoGui
 
             //typeof(string), //Account
             rendererText = new CellRendererText();
+            rendererText.CellBackgroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)];
             column = new TreeViewColumn("Account", rendererText,
                 "text", Column.Account);
             column.SortColumnId = (int)Column.Account;
@@ -258,6 +337,7 @@ namespace StockInfoGui
 
             //typeof(string), //BuyCost
             rendererText = new CellRendererText();
+            rendererText.CellBackgroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)];
             column = new TreeViewColumn("BuyCost", rendererText,
                 "text", Column.BuyCost);
             column.SortColumnId = (int)Column.BuyCost;
@@ -266,6 +346,7 @@ namespace StockInfoGui
 
             //typeof(string)  //BuyDate
             rendererText = new CellRendererText();
+            rendererText.CellBackgroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)];
             column = new TreeViewColumn("BuyDate", rendererText,
                 "text", Column.BuyDate);
             column.SortColumnId = (int)Column.BuyDate;
@@ -345,6 +426,54 @@ namespace StockInfoGui
             }
         }
 
+        void UpdateExtendedColumnColors()
+        {
+            var treeviewmodel = treeView.Model;
+            treeView.Path(out string path, out string rev_path);
+            TreePath treePath = new TreePath(path);
+            treeView.Model.GetIter(out TreeIter iter, treePath);
+            foreach (var column in treeView.Columns)
+            {
+                if (column.Title == "ChangeSinceBuy")
+                    foreach (var cell_val in column.Cells)
+                    {
+                        treeviewmodel.IterChildren(out TreeIter treeIter);
+                        var cell_renderer = (cell_val as Gtk.CellRendererText);
+                        RenderArtistName(column, cell_renderer, store, treeIter);
+                        //if (sadsda.Text != null && sadsda.Text.Contains('-')) (cell_val as Gtk.CellRendererText).BackgroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Secondary)];
+                        //var col_item_value = cell_val.Data;
+                    }
+            }
+        }
+
+        private void RenderArtistName(Gtk.TreeViewColumn column, Gtk.CellRenderer cell, Gtk.ListStore model, Gtk.TreeIter iter)
+        {
+            int itemcnt = stock_file.line_content.Count;
+            store.IterChildren(out TreeIter mode_iter);
+
+            for (int i = 0; i < itemcnt; i++)
+            {
+                //foreach (var item in model.getval)
+                string str_val = (string)store.GetValue(mode_iter, 10);
+                if (str_val.Contains('(') == true)
+                {
+                    var cellitem = (cell as Gtk.CellRendererText);
+                    var cellitemcol = column.Cells;
+                    cellitemcol[0].CellBackgroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Secondary)];
+                    //(cell as Gtk.CellRendererText).ForegroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Secondary)];
+                }
+                else
+                {
+                    var cellitem = (cell as Gtk.CellRendererText);
+                    var cellitemcol = column.Cells;
+                    cellitemcol[0].CellBackgroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)];
+                    //(cell as Gtk.CellRendererText).ForegroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)];
+                }
+                (cell as Gtk.CellRendererText).Text = str_val;
+                store.IterNext(ref mode_iter);
+            }
+        }
+
         void CreateModel()
         {
             store.Clear();
@@ -353,13 +482,13 @@ namespace StockInfoGui
                 string BuyCost = item.BuyCost.ToString("C", CultureInfo.CurrentCulture);
                 string BuyDate = item.BuyDate == null ? string.Empty : ((DateTime)item.BuyDate).ToShortDateString();
                 string Quantity = item.Quantity.ToString();
-                store.AppendValues(item.Ticker, Quantity, item.Account, BuyCost, BuyDate);
+                store.AppendValues(item.Ticker, item.Quantity, item.Account, BuyCost, BuyDate);
             }
         }
 
         void CreateCompleteModel()
         {
-            store.Clear(); 
+            store.Clear();
             foreach (Structures.StockItem item in stock_processor.file_content)
             {
                 string BuyCost = item.BuyCost.ToString("C", CultureInfo.CurrentCulture);
@@ -376,7 +505,6 @@ namespace StockInfoGui
 
                 if (item.BuyDate != null)
                 {
-
                     Price = item.Price.ToString("C", CultureInfo.CurrentCulture);
                     Worth = item.Worth.ToString("C", CultureInfo.CurrentCulture);
                     OwnershipHigh = item.OwnershipHigh.ToString("C", CultureInfo.CurrentCulture);
@@ -387,8 +515,49 @@ namespace StockInfoGui
                     DaysFromPurchase = item.DaysFromPurchase.ToString();
                 }
 
+                /*
+                    Gdk.RGBA Primary = new Gdk.RGBA();
+                    Gdk.RGBA PrimaryLight = new Gdk.RGBA();
+                    Gdk.RGBA PrimaryDark = new Gdk.RGBA();                
+                    Gdk.RGBA Secondary = new Gdk.RGBA();
+                    Gdk.RGBA SecondaryLight = new Gdk.RGBA();
+                    Gdk.RGBA SecondaryDark = new Gdk.RGBA();
+                
+                    Primary.Alpha = 1;
+                    PrimaryLight.Alpha = 1;
+                    PrimaryDark.Alpha = 1;
+                    Secondary.Alpha = 1;
+                    SecondaryLight.Alpha = 1;
+                    SecondaryDark.Alpha = 1;
+
+                    //Primary 80c686 129 199 132
+                    Primary.Red = (double)129 / (double)255;
+                    Primary.Green = (double)199 / (double)255;
+                    Primary.Blue = (double)132 / (double)255;
+                    //PrimaryLight b1f9b3 177 249 179
+                    PrimaryLight.Red = (double)177 / (double)255;
+                    PrimaryLight.Green = (double)249 / (double)255;
+                    PrimaryLight.Blue = (double)179 / (double)255;
+                    //PrimaryDark 509556 80 149 86
+                    PrimaryDark.Red = (double)80 / (double)255;
+                    PrimaryDark.Green = (double)149 / (double)255;
+                    PrimaryDark.Blue = (double)86 / (double)255;
+                    //Secondary ef5350 239 83 80
+                    Secondary.Red = (double)239 / (double)255;
+                    Secondary.Green = (double)83 / (double)255;
+                    Secondary.Blue = (double)80 / (double)255;
+                    //SecondaryLight ff867c 255 134 124
+                    SecondaryLight.Red = (double)255 / (double)255;
+                    SecondaryLight.Green = (double)134 / (double)255;
+                    SecondaryLight.Blue = (double)124 / (double)255;
+                    //SecondaryDark b61827 182 24 39
+                    SecondaryDark.Red = (double)182 / (double)255;
+                    SecondaryDark.Green = (double)24 / (double)255;
+                    SecondaryDark.Blue = (double)39 / (double)255;
+                */
+
                 store.AppendValues(
-                    item.Ticker, Quantity, item.Account, BuyCost, BuyDate, Price,
+                    item.Ticker, item.Quantity, item.Account, BuyCost, BuyDate, Price,
                     Worth, OwnershipHigh, OwnershipLow, PriceOpen, DayChange,
                     ChangeSinceBuy, DaysFromPurchase
                     );
@@ -409,6 +578,23 @@ namespace StockInfoGui
             sb.AppendLine("License File: " + license_file);
             sb.Append("Listing File: " + listing_file);
             _label1.Text = sb.ToString();
+        }
+    }
+
+    static class MaterialColorEnumUtils
+    {
+        public static int Value(this MainWindow.MaterialColors value)
+        {
+            switch (value)
+            {
+                case MainWindow.MaterialColors.Primary: return 0;
+                case MainWindow.MaterialColors.PrimaryLight: return 1;
+                case MainWindow.MaterialColors.PrimaryDark: return 2;
+                case MainWindow.MaterialColors.Secondary: return 3;
+                case MainWindow.MaterialColors.SecondaryLight: return 4;
+                case MainWindow.MaterialColors.SecondaryDark: return 5;
+                default: throw new ArgumentOutOfRangeException("value");
+            }
         }
     }
 }
