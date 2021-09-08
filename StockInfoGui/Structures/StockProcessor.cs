@@ -27,10 +27,11 @@ namespace StockInfoGui.Structures
         public List<StockItem> file_content;
         private List<Tuple<StockFileContentLine, List<StockReturnItem>>> query_return_content;
         private Dictionary<string, List<StockReturnItem>> query_return_content_raw;
-        private readonly int global_query_timeout = 2000;
-        private volatile bool DB_ACCESS = false;
-        private volatile bool ACCESS_query_return_content = false;
-        private readonly string connection_string = ConfigurationManager.AppSettings.Get("ConnectionString");
+
+        /// <summary>
+        /// SQL manager to do read operations for the specific type:
+        /// <seealso cref="StockInfoGui.Structures.StockReturnItem"/>
+        /// </summary>
         private MetaSqlHelper<StockReturnItem> MetaSQLManager = new MetaSqlHelper<StockReturnItem>
             (
                 ConfigurationManager.AppSettings.Get("ConnectionString"),
@@ -47,7 +48,41 @@ namespace StockInfoGui.Structures
                 "StockInfoGui.Structures.StockReturnItem"
             );
 
-        //StockOrMutualFund
+        private readonly int days_mutual_fund = 10;
+        private readonly int days_stock = 10;
+
+        /// <summary>
+        /// Timeout for delay on the thread to process incoming data
+        /// in ms
+        /// </summary>
+        private readonly int global_query_timeout = 2000;
+
+        /// <summary>
+        /// SQL connection string
+        /// </summary>
+        private readonly string connection_string = ConfigurationManager.AppSettings.Get("ConnectionString");
+
+        /// <summary>
+        /// 1000 ms * 60 s * 1 m
+        /// </summary>
+        private readonly int global_source_one_delay = 1000 * 60 * 1;
+
+        /// <summary>
+        /// Control access to the DB
+        /// race condition on calc process
+        /// </summary>
+        private volatile bool DB_ACCESS = false;
+
+        /// <summary>
+        /// race condition control to access the data
+        /// (THIS is kinda sus)
+        /// RACE CONDITION ON READ SHOULD NOT BE A THING FR FR
+        /// </summary>
+        private volatile bool ACCESS_query_return_content = false;
+
+        /// <summary>
+        /// Is it a stock or a mutual fund
+        /// </summary>
         public enum StockOrMutualFundEnum
         {
             Stock,
@@ -55,6 +90,25 @@ namespace StockInfoGui.Structures
             Money
         }
 
+        public async Task ProcessRestart(StockFile stock_file, string licence_path)
+        {
+            //
+        }
+
+        public async Task ProcessSingleItem(StockFile stock_file, string licence_path)
+        {
+            //
+        }
+
+        /// <summary>
+        /// NEEDS TO BE BROKEN DOWN to
+        /// <seealso cref="ProcessRestart"/>
+        /// <seealso cref="ProcessSingleItem"/>
+        /// after real multithreading and resource protection implemented
+        /// </summary>
+        /// <param name="stock_file"></param>
+        /// <param name="licence_path"></param>
+        /// <returns></returns>
         public async Task Process(StockFile stock_file, string licence_path)
         {
             if (!File.Exists(licence_path)) throw new FileNotFoundException();
@@ -71,8 +125,7 @@ namespace StockInfoGui.Structures
                     if (getFromSQL.Count <= 0 && item.BuyDate != null)
                     {
                         //get from alphavantage
-                        //1000 ms * 60 s * 1 m
-                        if (!first_item) await Task.Delay(1000 * 60 * 1);
+                        if (!first_item) await Task.Delay(global_source_one_delay);
                         var udp_inf = return_results_for_single_line(item);
                         await udp_inf;
                         List<StockReturnItem> query_res = udp_inf.Result;
@@ -100,15 +153,23 @@ namespace StockInfoGui.Structures
                             double minutes_timediff = Math.Abs((getFromSQL.TimestampUTC - rn).TotalMinutes);
                             //if its beetween normal trading hours and if there is even data for today
 
-                            bool isMutualFundAndIsDelayed = stockOrMutualFundVal == StockOrMutualFundEnum.MutualFund && Math.Abs((rn.Date - getFromSQL.TimestampUTC.Date).TotalDays) >= 4;
-                            bool isStockAndIsDelayed = stockOrMutualFundVal == StockOrMutualFundEnum.Stock && Math.Abs((rn.Date - getFromSQL.TimestampUTC.Date).TotalDays) > 1;
+                            bool isMutualFundAndIsDelayed = stockOrMutualFundVal == StockOrMutualFundEnum.MutualFund && Math.Abs((rn.Date - getFromSQL.TimestampUTC.Date).TotalDays) >= days_mutual_fund;
+                            bool isStockAndIsDelayed = stockOrMutualFundVal == StockOrMutualFundEnum.Stock && Math.Abs((rn.Date - getFromSQL.TimestampUTC.Date).TotalDays) >= days_stock;
 
-                            if (isMutualFundAndIsDelayed || isStockAndIsDelayed)
+                            bool isDayOfWeek = rn.DayOfWeek == DayOfWeek.Monday ||
+                                                rn.DayOfWeek == DayOfWeek.Tuesday ||
+                                                rn.DayOfWeek == DayOfWeek.Wednesday ||
+                                                rn.DayOfWeek == DayOfWeek.Thursday ||
+                                                rn.DayOfWeek == DayOfWeek.Friday;
+                            //bool isDelayLongerMins = minutes_timediff >= 60 * 4;
+                            bool isSqlContainToday = (rn.Date - getFromSQL.TimestampUTC.Date).TotalDays == 0;
+
+                            if (isMutualFundAndIsDelayed || (isStockAndIsDelayed && isDayOfWeek))
                             {
-                                if ((rn.Hour <= 18) && (rn.Hour >= 9) && (minutes_timediff >= 30))
+                                if ((rn.Hour <= 18) && (rn.Hour >= 9))
                                 {
-                                    if (!first_item) await Task.Delay(1000 * 60 * 1);
-                                    var query_res_task = getStockInfoFromLatest(item);
+                                    if (!first_item) await Task.Delay(global_source_one_delay);
+                                    var query_res_task = getStockInfoFromWeekly(item);
                                     await query_res_task;
                                     List<StockReturnItem> query_res = query_res_task.Result;
                                     query_return_content_raw[item.Ticker].AddRange(query_res);
@@ -131,7 +192,9 @@ namespace StockInfoGui.Structures
             // Process the data and divide between items. Queries are expensive I think
             //
             //
+
             file_content.Clear();
+
             //foreach (Tuple<StockFileContentLine, List<StockReturnItem>> item in query_return_content)
             //{
             //    file_content.Add(ProcessStockReturnItemSync(item));
@@ -149,7 +212,6 @@ namespace StockInfoGui.Structures
                 var async_list_results = async_results.ToList();
                 file_content.AddRange(async_list_results);
             });
-            task.Wait();
             await task;
         }
 
@@ -160,10 +222,20 @@ namespace StockInfoGui.Structures
             query_return_content_raw = new Dictionary<string, List<StockReturnItem>>();
         }
 
+        public void PurgeData()
+        {
+            //Data Restriction Compliance
+            string storedProcedure = "[StockData].[StockData].[DeleteAllData]";
+            List<SqlParameter> sqlParameters = new List<SqlParameter>();
+            CommitStoreProcedure(sqlParameters, storedProcedure);
+        }
+
         public List<StockReturnItem> GetAllStockReturnReturnItems(StockFileContentLine symbol)
         {
+            List<StockReturnItem> return_items = new List<StockReturnItem>();
             int TickerID = GetTickerID(symbol.Ticker);
-            return GetAllStockReturnReturnItems(TickerID);
+            if (TickerID != -1) return_items = GetAllStockReturnReturnItems(TickerID);
+            return return_items;
         }
 
         public List<StockReturnItem> GetAllStockReturnReturnItems(int TickerID)
@@ -187,6 +259,7 @@ namespace StockInfoGui.Structures
         public StockReturnItem GetLastStockReturnItemPerTickerID(string Ticker)
         {
             int TickerID = GetTickerID(Ticker);
+            if (TickerID == -1) return null;
             return GetLastStockReturnItemPerTickerID(TickerID);
         }
 
@@ -210,8 +283,8 @@ namespace StockInfoGui.Structures
 
         public StockReturnItem GetLastStockReturnItemPerTickerIDAndDate(string Ticker, DateTime TimestampUTC)
         {
-            int TickerID = GetTickerID(Ticker);
-            return GetLastStockReturnItemPerTickerIDAndDate(TickerID, TimestampUTC);
+            int? TickerID = GetTickerID(Ticker);
+            return GetLastStockReturnItemPerTickerIDAndDate((int)TickerID, TimestampUTC);
         }
 
         public StockReturnItem GetLastStockReturnItemPerTickerIDAndDate(int TickerID, DateTime TimestampUTC)
@@ -239,13 +312,19 @@ namespace StockInfoGui.Structures
             return StockReturnItemsOut.FirstOrDefault();
         }
 
-        public void WriteDatapointsToDB(List<StockDataPoint> dataPoints, StockFileContentLine symbol)
+        public void WriteDatapointsToDB(List<StockDataPoint> dataPoints, StockFileContentLine symbol, bool is_weekly = false)
         {
-            int TickerID = GetTickerID(symbol.Ticker);
+            DateTime rn = DateTime.Now;
+
+            int? TickerID = GetTickerID(symbol.Ticker);
             foreach (var item in dataPoints)
             {
                 string storedProcedure = "[StockData].[StockData].[InsertStockReturnItem]";
-                var timeUtc = item.Time;
+                DateTime timeUtc = item.Time;
+                if (is_weekly && (timeUtc.Date == rn.Date))
+                {
+                    timeUtc = rn;
+                }
                 TimeZoneInfo easternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
                 DateTime TimestampUTC = TimeZoneInfo.ConvertTimeFromUtc(timeUtc, easternZone);
                 decimal OpenPrice = item.OpeningPrice;
@@ -367,7 +446,7 @@ namespace StockInfoGui.Structures
         public int GetTickerID(string ticker)
         {
             string storedProcedure = "[StockData].[StockData].[GetTickerID]";
-            int TickerID = 0;
+            int? TickerID = null;
             List<SqlParameter> sqlParameters = new List<SqlParameter>();
             sqlParameters.Add(new SqlParameter
             {
@@ -385,7 +464,7 @@ namespace StockInfoGui.Structures
             });
             CommitStoreProcedure(sqlParameters, storedProcedure);
             SqlParameter param = sqlParameters.Where(x => x.ParameterName == "@TickerID").FirstOrDefault();
-            return (int)param.Value;
+            return param.Value == DBNull.Value ? -1 : (int)param.Value;
         }
 
         public StockOrMutualFundEnum GetTickerStockOrMutualFund(string ticker)
@@ -445,6 +524,9 @@ namespace StockInfoGui.Structures
             List<StockReturnItem> stockReturnItems = return_item.Item2;
             ACCESS_query_return_content = false;
 
+            while (DB_ACCESS) { }
+            StockOrMutualFundEnum stockOrMutualFundVal = GetTickerStockOrMutualFund(stockFileContentLine.Ticker);
+
             //public string Ticker { get; set; }
             new_stock_item.Ticker = stockFileContentLine.Ticker;
 
@@ -464,20 +546,20 @@ namespace StockInfoGui.Structures
             //lynq query from other program
             if (stockFileContentLine.BuyDate != null)
             {
+                int numdays_prim = 1;
+                if (stockOrMutualFundVal == StockOrMutualFundEnum.MutualFund) numdays_prim = 3;
+
                 StockReturnItem today_file_price_sql = GetLastStockReturnItemPerTickerID(stockFileContentLine.Ticker);
 
-                StockReturnItem today_morning_price_sql = GetLastStockReturnItemPerTickerIDAndDate(stockFileContentLine.Ticker, DateTime.Now);
-
+                StockReturnItem today_morning_price_sql = GetLastStockReturnItemPerTickerIDAndDate(stockFileContentLine.Ticker, DateTime.Now.AddDays(-numdays_prim));
                 if (today_morning_price_sql == null)
-                    today_morning_price_sql = GetLastStockReturnItemPerTickerIDAndDate(stockFileContentLine.Ticker, DateTime.Now.AddDays(-1));
+                    today_morning_price_sql = GetLastStockReturnItemPerTickerIDAndDate(stockFileContentLine.Ticker, DateTime.Now.AddDays(-(++numdays_prim)));
                 if (today_morning_price_sql == null)
-                    today_morning_price_sql = GetLastStockReturnItemPerTickerIDAndDate(stockFileContentLine.Ticker, DateTime.Now.AddDays(-2));
+                    today_morning_price_sql = GetLastStockReturnItemPerTickerIDAndDate(stockFileContentLine.Ticker, DateTime.Now.AddDays(-(++numdays_prim)));
                 if (today_morning_price_sql == null)
-                    today_morning_price_sql = GetLastStockReturnItemPerTickerIDAndDate(stockFileContentLine.Ticker, DateTime.Now.AddDays(-3));
+                    today_morning_price_sql = GetLastStockReturnItemPerTickerIDAndDate(stockFileContentLine.Ticker, DateTime.Now.AddDays(-(++numdays_prim)));
                 if (today_morning_price_sql == null)
-                    today_morning_price_sql = GetLastStockReturnItemPerTickerIDAndDate(stockFileContentLine.Ticker, DateTime.Now.AddDays(-4));
-                if (today_morning_price_sql == null)
-                    today_morning_price_sql = GetLastStockReturnItemPerTickerIDAndDate(stockFileContentLine.Ticker, DateTime.Now.AddDays(-5));
+                    today_morning_price_sql = GetLastStockReturnItemPerTickerIDAndDate(stockFileContentLine.Ticker, DateTime.Now.AddDays(-(++numdays_prim)));
 
                 //public decimal Price { get; set; }
                 //new_stock_item.Price = stockReturnItems
@@ -485,75 +567,20 @@ namespace StockInfoGui.Structures
                 new_stock_item.Price = today_file_price_sql.ClosePrice;
 
                 //public decimal Worth { get; set; }
-                new_stock_item.Worth = last_file_date.OpenPrice * stockFileContentLine.Quantity;
+                new_stock_item.Worth = last_file_date.ClosePrice * stockFileContentLine.Quantity;
 
                 //public decimal OwnershipHigh { get; set; }
-                StockReturnItem high_file_price = stockReturnItems.Select(D => D).Where(B => B.TimestampUTC > stockFileContentLine.BuyDate).OrderByDescending(C => C.HighPrice).FirstOrDefault();
+                StockReturnItem high_file_price = stockReturnItems.Select(D => D).Where(B => B.TimestampUTC >= stockFileContentLine.BuyDate).OrderByDescending(C => C.HighPrice).FirstOrDefault();
+                if (high_file_price == null) high_file_price = last_file_date;
                 new_stock_item.OwnershipHigh = high_file_price.HighPrice * stockFileContentLine.Quantity;
 
                 //public decimal OwnershipLow { get; set; }
                 StockReturnItem low_file_price = stockReturnItems.Select(D => D).Where(B => B.TimestampUTC > stockFileContentLine.BuyDate).OrderByDescending(C => C.LowPrice).LastOrDefault();
+                if (low_file_price == null) low_file_price = last_file_date;
                 new_stock_item.OwnershipLow = low_file_price.LowPrice * stockFileContentLine.Quantity;
 
                 //public decimal PriceOpen { get; set; }
                 new_stock_item.PriceOpen = today_morning_price_sql.OpenPrice * stockFileContentLine.Quantity;
-
-                //public decimal DayChange { get; set; }
-                new_stock_item.DayChange = new_stock_item.Worth - new_stock_item.PriceOpen;
-
-                new_stock_item.ChangeSinceBuy = new_stock_item.Worth - (new_stock_item.BuyCost * stockFileContentLine.Quantity);
-
-                //public int DaysFromPurchase { get; set; }
-                new_stock_item.DaysFromPurchase = (int)(DateTime.Now - ((DateTime)stockFileContentLine.BuyDate)).TotalDays;
-            }
-            return new_stock_item;
-        }
-
-        private StockItem ProcessStockReturnItemSync(Tuple<StockFileContentLine, List<StockReturnItem>> return_item)
-        {
-            StockItem new_stock_item = new StockItem();
-            StockFileContentLine stockFileContentLine = return_item.Item1;
-            List<StockReturnItem> stockReturnItems = return_item.Item2;
-
-            //public string Ticker { get; set; }
-            new_stock_item.Ticker = stockFileContentLine.Ticker;
-
-            //public double Quantity { get; set; }
-            new_stock_item.Quantity = stockFileContentLine.Quantity;
-
-            //public string Account { get; set; }
-            new_stock_item.Account = stockFileContentLine.Account;
-
-            //public decimal BuyCost { get; set; }
-            new_stock_item.BuyCost = stockFileContentLine.BuyCost;
-
-            //public DateTime? BuyDate;
-            new_stock_item.BuyDate = stockFileContentLine.BuyDate;
-
-            //with the data we have to get the values from the class
-            //lynq query from other program
-            if (stockFileContentLine.BuyDate != null)
-            {
-                StockReturnItem today_file_price_sql = GetLastStockReturnItemPerTickerID(stockFileContentLine.Ticker);
-
-                //public decimal Price { get; set; }
-                //new_stock_item.Price = stockReturnItems
-                StockReturnItem last_file_date = stockReturnItems.Select(D => D).OrderByDescending(C => C.TimestampUTC).FirstOrDefault();
-                new_stock_item.Price = today_file_price_sql.ClosePrice;
-
-                //public decimal Worth { get; set; }
-                new_stock_item.Worth = last_file_date.OpenPrice * stockFileContentLine.Quantity;
-
-                //public decimal OwnershipHigh { get; set; }
-                StockReturnItem high_file_price = stockReturnItems.Select(D => D).Where(B => B.TimestampUTC > stockFileContentLine.BuyDate).OrderByDescending(C => C.HighPrice).FirstOrDefault();
-                new_stock_item.OwnershipHigh = high_file_price.HighPrice * stockFileContentLine.Quantity;
-
-                //public decimal OwnershipLow { get; set; }
-                StockReturnItem low_file_price = stockReturnItems.Select(D => D).Where(B => B.TimestampUTC > stockFileContentLine.BuyDate).OrderByDescending(C => C.LowPrice).LastOrDefault();
-                new_stock_item.OwnershipLow = low_file_price.LowPrice * stockFileContentLine.Quantity;
-
-                //public decimal PriceOpen { get; set; }
-                new_stock_item.PriceOpen = today_file_price_sql.OpenPrice * stockFileContentLine.Quantity;
 
                 //public decimal DayChange { get; set; }
                 new_stock_item.DayChange = new_stock_item.Worth - new_stock_item.PriceOpen;
@@ -574,6 +601,9 @@ namespace StockInfoGui.Structures
             var latest = getStockInfoFromLatest(symbol);
             await latest;
             combined_data.AddRange(latest.Result);
+
+            await Task.Delay(global_source_one_delay);
+
             var weekly = getStockInfoFromWeekly(symbol);
             await weekly;
             combined_data.AddRange(weekly.Result);
@@ -650,7 +680,7 @@ namespace StockInfoGui.Structures
                 if (!task.IsCompleted) await Task.Delay(global_query_timeout);
                 task.Wait();
                 if (stockDataPoints.Count > 0)
-                    WriteDatapointsToDB(stockDataPoints, symbol);
+                    WriteDatapointsToDB(stockDataPoints, symbol, true);
             }
             return pull_weekly_information;
         }

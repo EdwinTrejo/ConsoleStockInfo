@@ -28,6 +28,8 @@ namespace StockInfoGui
         private bool primary_columns_added = false;
         private bool listing_file_processed = false;
         private volatile bool additional_columns_added = false;
+        private volatile bool results_calculation_running = false;
+        private volatile bool write_to_treeview = false;
 
         public string license_file = @"C:\Users\horse\Desktop\license.stock";
         public string listing_file = @"C:\Users\horse\Desktop\listing.stock";
@@ -63,7 +65,8 @@ namespace StockInfoGui
             PrimaryDark,
             Secondary,
             SecondaryLight,
-            SecondaryDark
+            SecondaryDark,
+            Common
         }
 
         Gdk.RGBA[] MaterialColorList = new Gdk.RGBA[Enum.GetNames(typeof(MaterialColors)).Length];
@@ -74,12 +77,15 @@ namespace StockInfoGui
         {
             builder.Autoconnect(this);
 
-            MenuItem file = new MenuItem("File");
-            MenuItem file2 = new MenuItem("About");
-            Menu filemenu = new Menu();
-            Menu filemenu2 = new Menu();
-            file.Submenu = filemenu;
-            file2.Submenu = filemenu2;
+            MenuItem menu_item_file = new MenuItem("File");
+            MenuItem menu_item_data = new MenuItem("Data");
+            MenuItem menu_item_about = new MenuItem("About");
+            Menu menu_file = new Menu();
+            Menu menu_data = new Menu();
+            Menu menu_about = new Menu();
+            menu_item_file.Submenu = menu_file;
+            menu_item_data.Submenu = menu_data;
+            menu_item_about.Submenu = menu_about;
 
             MenuItem open_lic_file = new MenuItem("Open License File");
             open_lic_file.Activated += OpenLicenseFile;
@@ -90,16 +96,25 @@ namespace StockInfoGui
             MenuItem exit = new MenuItem("Exit");
             exit.Activated += OnActivated;
 
-            filemenu.Append(open_lic_file);
-            filemenu.Append(open_lis_file);
-            filemenu.Append(exit);
+            menu_file.Append(open_lic_file);
+            menu_file.Append(open_lis_file);
+            menu_file.Append(exit);
+
+            MenuItem menu_item_clear_screen = new MenuItem("Clear Screen");
+            MenuItem menu_item_purge_db = new MenuItem("Purge Database");
+            menu_item_clear_screen.Activated += ClearResults;
+            menu_item_purge_db.Activated += PurgeDB;
+
+            menu_data.Append(menu_item_clear_screen);
+            menu_data.Append(menu_item_purge_db);
 
             MenuItem about = new MenuItem("About");
             about.Activated += AboutMenu;
-            filemenu2.Append(about);
+            menu_about.Append(about);
 
-            _menubar1.Append(file);
-            _menubar1.Append(file2);
+            _menubar1.Append(menu_item_file);
+            _menubar1.Append(menu_item_data);
+            _menubar1.Append(menu_item_about);
 
             //Primary 80c686 129 199 132
             MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)].Alpha = 1;
@@ -139,7 +154,7 @@ namespace StockInfoGui
                     typeof(string), //Ticker
                     typeof(double), //Quantity
                     typeof(string), //Account
-                    typeof(string), //BuyCost
+                    typeof(double), //BuyCost
                     typeof(string), //BuyDate
                     typeof(string), //Price
                     typeof(string), //Worth
@@ -150,10 +165,12 @@ namespace StockInfoGui
                     typeof(string), //ChangeSinceBuy
                     typeof(string) //DaysFromPurchase
                 );
-
+            while (write_to_treeview) { }
+            write_to_treeview = true;
             treeView = new TreeView(store);
             treeView.Expand = true;
             treeView.HoverExpand = true;
+            write_to_treeview = false;
             treeView.EnableSearch = true;
             AddColumns(treeView);
 
@@ -230,31 +247,62 @@ namespace StockInfoGui
         private void ClearResults(object sender, EventArgs a)
         {
             store.Clear();
+            while (write_to_treeview) { }
+            write_to_treeview = true;
+            foreach (var column in treeView.Columns)
+            {
+                foreach (var cell_val in column.Cells)
+                {
+                    (cell_val as Gtk.CellRendererText).BackgroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Common)];
+                }
+            }
+            write_to_treeview = false;
+        }
+
+        private void PurgeDB(object sender, EventArgs a)
+        {
+            stock_processor.PurgeData();
         }
 
         private async void UpdateLabelStatus(object sender, EventArgs a)
         {
-            _label1.Text = $"Processing {check_unique_items_count} items\napproximate time: {check_unique_items_count} Minutes | {DateTime.Now.AddMinutes(check_unique_items_count * 3).ToShortTimeString()}";
-            ShowAll();
+            Task calc_task = Task.Run(async () =>
+            {
+                if (!results_calculation_running)
+                {
+                    _label1.Text = $"Processing {check_unique_items_count} items\napproximate time: {check_unique_items_count} Minutes | {DateTime.Now.AddMinutes(check_unique_items_count * 3).ToShortTimeString()}";
+                    ShowAll();
+                }
+            });
+            //await calc_task;
         }
 
         private async void CalculateResults(object sender, EventArgs a)
         {
             try
             {
+                DateTime rn = DateTime.Now;
                 if (!listing_file_processed) throw new Exception("Listing File has not been processed!");
-
+                if (results_calculation_running) throw new Exception("The calculation program is already running in the background!");
                 Task calc_task = Task.Run(async () =>
                 {
+                    results_calculation_running = true;
                     await stock_processor.Process(stock_file, license_file);
+                    await Task.Delay(1000);
                     if (!additional_columns_added) AddColumnsAfterProcessing(treeView);
                     CreateCompleteModel();
+                    while (write_to_treeview) { }
+                    write_to_treeview = true;
                     _scrolledwindow1.Add(treeView);
+                    write_to_treeview = false;
                     _scrolledwindow1.WidthRequest = 1050;
                     UpdateExtendedColumnColors();
                     _listbox1.ShowAll();
+                    string process_time = $"{(DateTime.Now.Date - rn.Date).TotalHours}:{(DateTime.Now.Date - rn.Date).TotalMinutes}:{(DateTime.Now.Date - rn.Date).TotalSeconds}:{(DateTime.Now.Date - rn.Date).TotalMilliseconds}";
+                    _label1.Text = $"Processing Completed in {process_time} HR:MM:SS::MS";
+                    results_calculation_running = false;
                 });
-                calc_task.Wait();
+                //calc_task.Wait();
                 await calc_task;
             }
             catch (Exception e)
@@ -281,7 +329,10 @@ namespace StockInfoGui
             {
                 stock_file = new StockFile(listing_file);
                 CreateModel();
+                while (write_to_treeview) { }
+                write_to_treeview = true;
                 _scrolledwindow1.Add(treeView);
+                write_to_treeview = false;
                 _scrolledwindow1.HeightRequest = 500;
                 _listbox1.ShowAll();
                 check_unique_items = new Dictionary<string, string>();
@@ -310,6 +361,8 @@ namespace StockInfoGui
         {
             //typeof(string), //Ticker
             CellRendererText rendererText = new CellRendererText();
+            Gdk.RGBA copy_original_rgba= rendererText.CellBackgroundRgba.Copy();
+            MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Common)] = copy_original_rgba;
             rendererText.CellBackgroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)];
             TreeViewColumn column = new TreeViewColumn("Ticker", rendererText,
                 "text", Column.Ticker);
@@ -357,6 +410,8 @@ namespace StockInfoGui
 
         void AddColumnsAfterProcessing(TreeView treeView)
         {
+            while (write_to_treeview) { }
+            write_to_treeview = true;
             if (!additional_columns_added && primary_columns_added)
             {
                 //typeof(string)  //Price
@@ -424,6 +479,7 @@ namespace StockInfoGui
                 column.Expand = true;
                 treeView.AppendColumn(column);
             }
+            write_to_treeview = false;
         }
 
         void UpdateExtendedColumnColors()
@@ -432,18 +488,79 @@ namespace StockInfoGui
             treeView.Path(out string path, out string rev_path);
             TreePath treePath = new TreePath(path);
             treeView.Model.GetIter(out TreeIter iter, treePath);
+            double amount_total_overall = 0;
+            double amount_total_day = 0;
+
+            foreach (var stock_item_read in stock_processor.file_content)
+            {
+                amount_total_overall += stock_item_read.ChangeSinceBuy;
+                amount_total_day += stock_item_read.DayChange;
+            }
+
+            while (write_to_treeview) { }
+            write_to_treeview = true;
             foreach (var column in treeView.Columns)
             {
-                if (column.Title == "ChangeSinceBuy")
-                    foreach (var cell_val in column.Cells)
+                foreach (var cell_val in column.Cells)
+                {
+                    switch (column.Title)
                     {
-                        treeviewmodel.IterChildren(out TreeIter treeIter);
-                        var cell_renderer = (cell_val as Gtk.CellRendererText);
-                        RenderArtistName(column, cell_renderer, store, treeIter);
-                        //if (sadsda.Text != null && sadsda.Text.Contains('-')) (cell_val as Gtk.CellRendererText).BackgroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Secondary)];
-                        //var col_item_value = cell_val.Data;
-                    }
+                        case "ChangeSinceBuy":
+                            {
+                                if (amount_total_overall >= 0)
+                                {
+                                    if (amount_total_overall <= 5)
+                                    {
+                                        (cell_val as Gtk.CellRendererText).ForegroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)];
+                                    }
+                                    else
+                                    {
+                                        (cell_val as Gtk.CellRendererText).ForegroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.PrimaryDark)];
+                                    }
+                                }
+                                else
+                                {
+                                    if (amount_total_overall >= -2)
+                                    {
+                                        (cell_val as Gtk.CellRendererText).ForegroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Secondary)];
+                                    }
+                                    else
+                                    {
+                                        (cell_val as Gtk.CellRendererText).ForegroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.SecondaryDark)];
+                                    }
+                                }
+                                break;
+                            }
+                        case "DayChange":
+                            {
+                                if (amount_total_day >= 0)
+                                {
+                                    if (amount_total_day <= 0.5)
+                                    {
+                                        (cell_val as Gtk.CellRendererText).ForegroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.PrimaryLight)];
+                                    }
+                                    else
+                                    {
+                                        (cell_val as Gtk.CellRendererText).ForegroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Primary)];
+                                    }
+                                }
+                                else
+                                {
+                                    if (amount_total_day >= -0.5)
+                                    {
+                                        (cell_val as Gtk.CellRendererText).ForegroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.SecondaryLight)];
+                                    }
+                                    else
+                                    {
+                                        (cell_val as Gtk.CellRendererText).ForegroundRgba = MaterialColorList[MaterialColorEnumUtils.Value(MaterialColors.Secondary)];
+                                    }
+                                }
+                                break;
+                            }
+                    };
+                }
             }
+            write_to_treeview = false;
         }
 
         private void RenderArtistName(Gtk.TreeViewColumn column, Gtk.CellRenderer cell, Gtk.ListStore model, Gtk.TreeIter iter)
@@ -482,7 +599,7 @@ namespace StockInfoGui
                 string BuyCost = item.BuyCost.ToString("C", CultureInfo.CurrentCulture);
                 string BuyDate = item.BuyDate == null ? string.Empty : ((DateTime)item.BuyDate).ToShortDateString();
                 string Quantity = item.Quantity.ToString();
-                store.AppendValues(item.Ticker, item.Quantity, item.Account, BuyCost, BuyDate);
+                store.AppendValues(item.Ticker, item.Quantity, item.Account, item.BuyCost, BuyDate);
             }
         }
 
@@ -494,70 +611,29 @@ namespace StockInfoGui
                 string BuyCost = item.BuyCost.ToString("C", CultureInfo.CurrentCulture);
                 string BuyDate = item.BuyDate == null ? string.Empty : ((DateTime)item.BuyDate).ToShortDateString();
                 string Quantity = item.Quantity.ToString();
-                string Price = BuyCost;
-                string Worth = BuyCost;
-                string OwnershipHigh = BuyCost;
-                string OwnershipLow = BuyCost;
-                string PriceOpen = BuyCost;
-                string DayChange = "0.0";
-                string ChangeSinceBuy = "0.0";
+                double Price = item.BuyCost * item.Quantity;
+                double Worth = item.BuyCost * item.Quantity;
+                double OwnershipHigh = item.BuyCost * item.Quantity;
+                double OwnershipLow = item.BuyCost * item.Quantity;
+                double PriceOpen = item.BuyCost * item.Quantity;
+                double DayChange = 0;
+                double ChangeSinceBuy = 0;
                 string DaysFromPurchase = "";
 
                 if (item.BuyDate != null)
                 {
-                    Price = item.Price.ToString("C", CultureInfo.CurrentCulture);
-                    Worth = item.Worth.ToString("C", CultureInfo.CurrentCulture);
-                    OwnershipHigh = item.OwnershipHigh.ToString("C", CultureInfo.CurrentCulture);
-                    OwnershipLow = item.OwnershipLow.ToString("C", CultureInfo.CurrentCulture);
-                    PriceOpen = item.PriceOpen.ToString("C", CultureInfo.CurrentCulture);
-                    DayChange = item.DayChange.ToString("C", CultureInfo.CurrentCulture);
-                    ChangeSinceBuy = item.ChangeSinceBuy.ToString("C", CultureInfo.CurrentCulture);
+                    Price = item.Price;
+                    Worth = item.Worth;
+                    OwnershipHigh = item.OwnershipHigh;
+                    OwnershipLow = item.OwnershipLow;
+                    PriceOpen = item.PriceOpen;
+                    DayChange = item.DayChange;
+                    ChangeSinceBuy = item.ChangeSinceBuy;
                     DaysFromPurchase = item.DaysFromPurchase.ToString();
                 }
 
-                /*
-                    Gdk.RGBA Primary = new Gdk.RGBA();
-                    Gdk.RGBA PrimaryLight = new Gdk.RGBA();
-                    Gdk.RGBA PrimaryDark = new Gdk.RGBA();                
-                    Gdk.RGBA Secondary = new Gdk.RGBA();
-                    Gdk.RGBA SecondaryLight = new Gdk.RGBA();
-                    Gdk.RGBA SecondaryDark = new Gdk.RGBA();
-                
-                    Primary.Alpha = 1;
-                    PrimaryLight.Alpha = 1;
-                    PrimaryDark.Alpha = 1;
-                    Secondary.Alpha = 1;
-                    SecondaryLight.Alpha = 1;
-                    SecondaryDark.Alpha = 1;
-
-                    //Primary 80c686 129 199 132
-                    Primary.Red = (double)129 / (double)255;
-                    Primary.Green = (double)199 / (double)255;
-                    Primary.Blue = (double)132 / (double)255;
-                    //PrimaryLight b1f9b3 177 249 179
-                    PrimaryLight.Red = (double)177 / (double)255;
-                    PrimaryLight.Green = (double)249 / (double)255;
-                    PrimaryLight.Blue = (double)179 / (double)255;
-                    //PrimaryDark 509556 80 149 86
-                    PrimaryDark.Red = (double)80 / (double)255;
-                    PrimaryDark.Green = (double)149 / (double)255;
-                    PrimaryDark.Blue = (double)86 / (double)255;
-                    //Secondary ef5350 239 83 80
-                    Secondary.Red = (double)239 / (double)255;
-                    Secondary.Green = (double)83 / (double)255;
-                    Secondary.Blue = (double)80 / (double)255;
-                    //SecondaryLight ff867c 255 134 124
-                    SecondaryLight.Red = (double)255 / (double)255;
-                    SecondaryLight.Green = (double)134 / (double)255;
-                    SecondaryLight.Blue = (double)124 / (double)255;
-                    //SecondaryDark b61827 182 24 39
-                    SecondaryDark.Red = (double)182 / (double)255;
-                    SecondaryDark.Green = (double)24 / (double)255;
-                    SecondaryDark.Blue = (double)39 / (double)255;
-                */
-
                 store.AppendValues(
-                    item.Ticker, item.Quantity, item.Account, BuyCost, BuyDate, Price,
+                    item.Ticker, item.Quantity, item.Account, item.BuyCost, BuyDate, Price,
                     Worth, OwnershipHigh, OwnershipLow, PriceOpen, DayChange,
                     ChangeSinceBuy, DaysFromPurchase
                     );
@@ -593,6 +669,7 @@ namespace StockInfoGui
                 case MainWindow.MaterialColors.Secondary: return 3;
                 case MainWindow.MaterialColors.SecondaryLight: return 4;
                 case MainWindow.MaterialColors.SecondaryDark: return 5;
+                case MainWindow.MaterialColors.Common: return 6;
                 default: throw new ArgumentOutOfRangeException("value");
             }
         }

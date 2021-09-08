@@ -53,12 +53,12 @@ namespace StockInfoGui.Structures
                 BuyDate = null
             };
 
-            try
+            if (parts.Length == 5)
             {
                 DateTime.TryParse(parts[4], out DateTime BuyDate);
                 new_content.BuyDate = BuyDate;
             }
-            catch { }
+
             return new_content;
         }
     }

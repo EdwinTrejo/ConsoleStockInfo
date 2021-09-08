@@ -74,6 +74,7 @@
     <Build Include="StoredProcedures\GetLastStockReturnItemPerTickerIDAndDate.sql" />
     <Build Include="StoredProcedures\GetAllStockReturnItemPerTickerID.sql" />
     <Build Include="StoredProcedures\GetTickerStockOrMutualFund.sql" />
+    <Build Include="StoredProcedures\DeleteAllData.sql" />
   </ItemGroup>
   <ItemGroup>
     <None Include="StockData.publish.xml" />

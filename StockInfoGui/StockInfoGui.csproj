@@ -22,6 +22,7 @@
     <PackageReference Include="AlphaVantage.Net.Stocks" Version="2.0.2" />
     <PackageReference Include="Avalonia" Version="0.10.7" />
     <PackageReference Include="Avalonia.Desktop" Version="0.10.7" />
+    <PackageReference Include="Google.Apis.Customsearch.v1" Version="1.49.0.2084" />
     <PackageReference Include="GtkSharp" Version="3.24.24.*" />
     <PackageReference Include="ServiceStack.Text.Core" Version="5.12.0" />
     <PackageReference Include="System.Configuration.ConfigurationManager" Version="5.0.0" />
